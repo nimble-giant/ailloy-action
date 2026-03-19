@@ -1,0 +1,172 @@
+name: "Setup Ailloy"
+description: "Install the ailloy CLI. Pin to a release version or build from a branch/ref."
+
+inputs:
+  version:
+    description: >
+      Release version tag to install (e.g. v0.6.10, latest).
+      Ignored when ref is set.
+    required: false
+    default: "latest"
+  ref:
+    description: >
+      Branch, tag, or commit SHA to build from source.
+      Takes precedence over version when set.
+    required: false
+    default: ""
+  token:
+    description: >
+      GitHub token used to resolve the latest release and avoid API rate limits.
+    required: false
+    default: ${{ github.token }}
+  args:
+    description: >
+      Arguments to pass to ailloy after installation (e.g. "assay ./CLAUDE.md --format json").
+      When set, the action runs `ailloy <args>` as a final step.
+      Leave empty to only install ailloy and manage invocations yourself.
+    required: false
+    default: ""
+
+outputs:
+  version:
+    description: "The installed version of ailloy (from --version output)."
+    value: ${{ steps.version-output.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    # ── Path A: download pre-built binary from a release ──────────────────────
+
+    - name: Resolve latest version tag
+      if: inputs.ref == '' && inputs.version == 'latest'
+      id: latest
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        TAG=$(curl -fsSL \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          https://api.github.com/repos/nimble-giant/ailloy/releases/latest \
+          | grep '"tag_name"' | head -1 \
+          | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+        if [ -z "$TAG" ]; then
+          echo "::error::Failed to resolve latest ailloy release tag."
+          exit 1
+        fi
+        echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+    - name: Download ailloy binary
+      if: inputs.ref == ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        VERSION="${{ inputs.version == 'latest' && steps.latest.outputs.tag || inputs.version }}"
+
+        # Detect OS
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+        case "$OS" in
+          linux)                          OS="linux"   ;;
+          darwin)                         OS="darwin"  ;;
+          mingw*|msys*|cygwin*|windows*)  OS="windows" ;;
+          *)
+            echo "::error::Unsupported OS: $OS"
+            exit 1
+            ;;
+        esac
+
+        # Detect arch
+        ARCH=$(uname -m)
+        case "$ARCH" in
+          x86_64)        ARCH="amd64" ;;
+          aarch64|arm64) ARCH="arm64" ;;
+          *)
+            echo "::error::Unsupported architecture: $ARCH"
+            exit 1
+            ;;
+        esac
+
+        EXT=""
+        [ "$OS" = "windows" ] && EXT=".exe"
+
+        BINARY="ailloy-${OS}-${ARCH}${EXT}"
+        BASE_URL="https://github.com/nimble-giant/ailloy/releases/download/${VERSION}"
+
+        INSTALL_DIR="$HOME/.local/bin"
+        mkdir -p "$INSTALL_DIR"
+
+        echo "Downloading ailloy ${VERSION} for ${OS}/${ARCH}"
+
+        # Download binary and checksums
+        curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+          "${BASE_URL}/${BINARY}" -o "$INSTALL_DIR/ailloy${EXT}"
+        curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+          "${BASE_URL}/checksums.txt" -o /tmp/ailloy-checksums.txt
+
+        # Verify checksum
+        cd "$INSTALL_DIR"
+        EXPECTED=$(grep " ${BINARY}$" /tmp/ailloy-checksums.txt | awk '{print $1}')
+        if [ -z "$EXPECTED" ]; then
+          echo "::error::No checksum entry found for ${BINARY} in checksums.txt"
+          exit 1
+        fi
+        echo "${EXPECTED}  ailloy${EXT}" | sha256sum --check --status || \
+          { echo "::error::Checksum verification failed for ${BINARY}"; exit 1; }
+        echo "Checksum verified."
+
+        chmod +x "$INSTALL_DIR/ailloy${EXT}"
+        echo "$INSTALL_DIR" >> "$GITHUB_PATH"
+
+    # ── Path B: build from a branch / ref ─────────────────────────────────────
+
+    - name: Set up Go (for source build)
+      if: inputs.ref != ''
+      uses: actions/setup-go@v5
+      with:
+        go-version: "stable"
+        cache: false
+
+    - name: Build ailloy from source
+      if: inputs.ref != ''
+      shell: bash
+      run: |
+        REF="${{ inputs.ref }}"
+        INSTALL_DIR="$HOME/.local/bin"
+        mkdir -p "$INSTALL_DIR"
+
+        TMPDIR=$(mktemp -d)
+        echo "Cloning nimble-giant/ailloy at ref: $REF"
+
+        # Try a shallow clone of the exact branch/tag first (fast path).
+        # Fall back to a full clone + checkout for arbitrary commit SHAs.
+        if git clone --depth=1 --branch "$REF" \
+             https://github.com/nimble-giant/ailloy.git "$TMPDIR" 2>/dev/null; then
+          echo "Shallow clone succeeded for branch/tag: $REF"
+        else
+          echo "Branch/tag clone failed; attempting full clone for commit SHA."
+          git clone https://github.com/nimble-giant/ailloy.git "$TMPDIR"
+          git -C "$TMPDIR" checkout "$REF"
+        fi
+
+        echo "Building ailloy..."
+        cd "$TMPDIR"
+        go build -o "$INSTALL_DIR/ailloy" ./cmd/ailloy
+
+        echo "$INSTALL_DIR" >> "$GITHUB_PATH"
+
+    # ── Verify ────────────────────────────────────────────────────────────────
+
+    - name: Verify installation
+      id: version-output
+      shell: bash
+      run: |
+        ailloy --version
+        echo "version=$(ailloy --version 2>&1 | head -1)" >> "$GITHUB_OUTPUT"
+
+    # ── Optional command ──────────────────────────────────────────────────────
+
+    - name: Run ailloy
+      if: inputs.args != ''
+      shell: bash
+      run: ailloy ${{ inputs.args }}
