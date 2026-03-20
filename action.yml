@@ -1,4 +1,4 @@
-name: "ailloy"
+name: "ailloy action"
 description: "Install and run the ailloy CLI — a package manager for AI instructions. Pin to a release version or build from a branch."
 
 branding:
