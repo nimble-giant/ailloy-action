@@ -1,4 +1,4 @@
-name: "Setup Ailloy"
+name: "Ailloy"
 description: "Install the ailloy CLI. Pin to a release version or build from a branch/ref."
 
 inputs:
