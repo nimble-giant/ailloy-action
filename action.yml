@@ -1,5 +1,9 @@
-name: "Ailloy"
-description: "Install the ailloy CLI. Pin to a release version or build from a branch/ref."
+name: "ailloy"
+description: "Install and run the ailloy CLI — a package manager for AI instructions. Pin to a release version or build from a branch."
+
+branding:
+  icon: package
+  color: orange
 
 inputs:
   version:

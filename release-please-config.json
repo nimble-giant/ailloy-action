@@ -6,7 +6,7 @@
       "release-type": "simple",
       "component": "ailloy-action",
       "include-component-in-tag": false,
-      "initial-version": "0.1.0",
+      "initial-version": "0.1.1",
       "changelog-path": "CHANGELOG.md",
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
